@@ -454,6 +454,7 @@ const TT = (() => {
     game.code = code;
     meta.game = game;
     meta.etag = etag;
+    meta.baseMove = game.moveNo;
     meta.dirty = false;
   }
 
@@ -462,7 +463,7 @@ const TT = (() => {
   }
 
   // Send this phone's copy of the game to the service.
-  async function pushOnline(code) {
+  async function pushOnline(code, retried = false) {
     const meta = onlineMeta(code);
     if (!meta) return 'gone';
     meta.dirty = true;
@@ -470,12 +471,23 @@ const TT = (() => {
     try {
       const r = await api('PUT', code, { game: meta.game, etag: meta.etag });
       if (r.status === 200) {
-        meta.etag = r.data.etag; meta.dirty = false; save();
+        meta.etag = r.data.etag; meta.baseMove = meta.game.moveNo; meta.dirty = false; save();
         if (meta.game.over) finishOnline(code);
         return 'ok';
       }
-      if (r.status === 409 && r.data && r.data.game) {
+      // Someone joined or a seat was freed, but no moves were made elsewhere: keep our move,
+      // take the server's seat list, and send again.
+      const server = r.data && r.data.game;
+      if (r.status === 409 && server && !retried && !server.over && server.moveNo === meta.baseMove) {
+        meta.game.claims = server.claims || {};
+        meta.etag = r.data.etag;
+        save();
+        if (seatLost(code)) { dropLostSeat(code); return 'conflict'; }
+        return pushOnline(code, true);
+      }
+      if ((r.status === 409 || r.status === 403) && r.data && r.data.game) {
         adopt(code, r.data.game, r.data.etag); save();
+        if (seatLost(code)) { dropLostSeat(code); return 'conflict'; }
         toast('The game changed on the other phone, so this phone was updated to match.');
         if (meta.game.over) finishOnline(code); else refreshIfViewing(code);
         return 'conflict';
@@ -504,9 +516,26 @@ const TT = (() => {
       if (r.status !== 200) return 'offline';
       if (r.data.etag === meta.etag) return 'same';
       adopt(code, r.data.game, r.data.etag); save();
+      if (seatLost(code)) { dropLostSeat(code); return 'changed'; }
       if (meta.game.over) finishOnline(code);
       return 'changed';
     } catch (e) { return 'offline'; }
+  }
+
+  // True when this phone's player has been freed and then claimed by another phone.
+  function seatLost(code) {
+    const meta = onlineMeta(code);
+    const by = meta && meta.game.claims ? meta.game.claims[meta.me] : null;
+    return !!by && by !== deviceId();
+  }
+
+  function dropLostSeat(code) {
+    const meta = onlineMeta(code);
+    const p = meta.game.players.find((x) => x.id === meta.me);
+    Reflect.deleteProperty(db.online, code);
+    save();
+    toast(`${p ? p.name : 'Your player'} is now playing on another phone, so this game was removed from this phone.`);
+    if (route().name === 'online' && activeCode === code) { resetUi(); go(''); } else if (route().name === 'home') render();
   }
 
   // Once a shared game is over and synced: file it in this phone's history and drop it from the list.
@@ -529,11 +558,12 @@ const TT = (() => {
     for (let attempt = 0; attempt < 3; attempt++) {
       const code = newCode();
       g.code = code;
+      g.claims = { ...(g.claims || {}), [me]: deviceId() };
       let r;
       try { r = await api('PUT', code, { game: g, etag: null }); } catch (e) { delete g.code; throw e; }
       if (r.status === 200) {
         db.online = db.online || {};
-        db.online[code] = { code, me, etag: r.data.etag, game: g, map: {}, dirty: false, joinedAt: Date.now() };
+        db.online[code] = { code, me, etag: r.data.etag, game: g, map: {}, dirty: false, joinedAt: Date.now(), baseMove: g.moveNo };
         save();
         return code;
       }
@@ -541,6 +571,18 @@ const TT = (() => {
     }
     delete g.code;
     throw new Error('Could not get a free game code');
+  }
+
+  // A random id for this phone, used to lock the seat it joins as.
+  let cachedDevice = null;
+  function deviceId() {
+    if (cachedDevice) return cachedDevice;
+    try { cachedDevice = localStorage.getItem('lunar.device'); } catch (e) { /* private mode */ }
+    if (!cachedDevice) {
+      cachedDevice = 'dev-' + uid() + uid();
+      try { localStorage.setItem('lunar.device', cachedDevice); } catch (e) { /* private mode */ }
+    }
+    return cachedDevice;
   }
 
   const joinUrl = (code) => `${location.origin}${location.pathname}#/join/${code}`;
@@ -879,12 +921,14 @@ const TT = (() => {
       openModal(`<h2>Game options</h2>
         <div class="menu">
           <button class="btn secondary" id="mShare">Show game code</button>
+          <button class="btn secondary" id="mFree">Free up a seat</button>
           <button class="btn secondary" id="mEnd">End game now & save</button>
           <button class="btn danger" id="mLeave">Remove from this phone</button>
           <button class="btn ghost" data-action="close-modal">Back to game</button>
         </div>
         <p class="muted">Ending now ends it on both phones and subtracts everyone's remaining tiles. Removing only takes it off this phone. You can rejoin with the code.</p>`);
       $('#mShare').addEventListener('click', () => showShare(g.code));
+      $('#mFree').addEventListener('click', () => openFreeSeat(g));
       $('#mEnd').addEventListener('click', () => { closeModal(); endGame(g, null, 'manual'); });
       $('#mLeave').addEventListener('click', () => {
         confirmModal('Remove this online game from this phone? The other phone keeps it.', 'Remove', () => {
@@ -907,6 +951,34 @@ const TT = (() => {
     $('#mDiscard').addEventListener('click', () => {
       confirmModal('Discard this game? It will not be saved.', 'Discard', () => { db.phone = null; resetUi(); save(); go(''); });
     });
+  }
+
+  async function openFreeSeat(stale) {
+    const code = stale.code;
+    openModal('<h2>Free up a seat</h2><p class="muted">Checking who has joined…</p>');
+    await pullOnline(code);
+    const meta = onlineMeta(code);
+    if (!meta) { closeModal(); return; }
+    const g = meta.game;
+    const claims = g.claims || {};
+    const me = meta.me;
+    const taken = g.players.filter((p) => claims[p.id] && p.id !== me);
+    openModal(`<h2>Free up a seat</h2>
+      <p class="muted">Use this if someone got a new phone or joined as the wrong player. They can then join again with the game code.</p>
+      ${taken.length
+        ? `<div class="menu">${taken.map((p) => `<button class="btn secondary" data-free="${esc(p.id)}" style="--pc:${esc(p.color)}"><span class="dot"></span> ${esc(p.name)}</button>`).join('')}</div>`
+        : '<p class="muted">No one else has joined yet.</p>'}
+      <div class="row end" style="margin-top:12px"><button class="btn ghost" data-action="close-modal">Close</button></div>`);
+    $$('[data-free]').forEach((b) => b.addEventListener('click', () => {
+      const p = g.players.find((x) => x.id === b.dataset.free);
+      const rest = { ...g.claims };
+      Reflect.deleteProperty(rest, b.dataset.free);
+      g.claims = rest;
+      save();
+      closeModal();
+      pushOnline(g.code);
+      toast(`${p ? p.name + "'s" : 'That'} seat is free. They can join again with the code.`);
+    }));
   }
 
   function chooseSeatAndPublish(g) {
@@ -961,13 +1033,35 @@ const TT = (() => {
     const g = r.data.game;
     if (g.over) { out.innerHTML = '<p class="muted">That game has already finished.</p>'; return; }
     joinFound = { code, game: g, etag: r.data.etag };
+    const claims = g.claims || {};
+    const mine = deviceId();
     out.innerHTML = `<h3>Which player are you?</h3>
-      ${g.players.map((p) => `<div class="pick" style="--pc:${esc(p.color)}" data-g="claim" data-id="${esc(p.id)}" role="button" tabindex="0"><span class="dot"></span> ${esc(p.name)}</div>`).join('')}`;
+      ${g.players.map((p) => {
+        const by = claims[p.id];
+        if (by && by !== mine) {
+          return `<div class="pick taken" style="--pc:${esc(p.color)}" aria-disabled="true"><span class="dot"></span> ${esc(p.name)} <span class="order">Taken</span></div>`;
+        }
+        return `<div class="pick" style="--pc:${esc(p.color)}" data-g="claim" data-id="${esc(p.id)}" role="button" tabindex="0"><span class="dot"></span> ${esc(p.name)}${by === mine ? ' <span class="muted">(this phone)</span>' : ''}</div>`;
+      }).join('')}
+      ${Object.keys(claims).some((k) => claims[k] !== mine) ? '<p class="hint">“Taken” means another phone already joined as that player. If that was you on an old phone, ask someone in the game to tap ⋯ → Free up a seat.</p>' : ''}`;
   }
 
-  function claimSeat(id) {
+  async function claimSeat(id) {
     if (!joinFound) return;
     const { code, game, etag } = joinFound;
+    joinFound = null;
+    // Lock the seat for this phone on the server first; if someone beat us to it, show fresh choices.
+    game.claims = { ...(game.claims || {}), [id]: deviceId() };
+    let r;
+    try { r = await api('PUT', code, { game, etag }); } catch (e) {
+      $('#joinResult').innerHTML = '<p class="verdict no">Couldn\'t reach the game service. Check your connection.</p>';
+      return;
+    }
+    if (r.status !== 200) {
+      toast(r.status === 403 ? 'Someone just joined as that player. Pick again.' : 'The game just changed. Pick again.');
+      findGame(code);
+      return;
+    }
     // Match the game's players to this phone's players by id or name, adding any that are missing.
     const map = {};
     game.players.forEach((p) => {
@@ -978,8 +1072,7 @@ const TT = (() => {
     });
     game.code = code;
     db.online = db.online || {};
-    db.online[code] = { code, me: id, etag, game, map, dirty: false, joinedAt: Date.now() };
-    joinFound = null;
+    db.online[code] = { code, me: id, etag: r.data.etag, game, map, dirty: false, joinedAt: Date.now(), baseMove: game.moveNo };
     resetUi();
     save();
     go('online/' + code);

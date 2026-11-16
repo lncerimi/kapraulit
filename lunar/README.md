@@ -42,4 +42,4 @@ The game logic is in `game.js`. Board layout, tile counts and values are at the 
 - **Moving a game online:** a one-phone game can be moved online at any time with ⋯ → **Continue on two phones**.
 - **Your turn:** the home screen shows **Your turn!**, and an open game checks for the other player's move every few seconds.
 - **No connection:** moves are saved on the phone and sent when the connection is back.
-- **Where games are stored:** shared games live in a small Netlify service (`lunar-api/`, deployed as `lunar-games-api.netlify.app`). Codes look like `LUNAR-482917`. Anyone with a game's code can open it.
+- **Where games are stored:** shared games live in a small Netlify service (`lunar-api/`, deployed as `lunar-games-api.netlify.app`). Codes look like `LUNAR-482917`. Each player's seat is locked to the phone that joined as them; anyone in the game can free a seat (⋯ → Free up a seat) if someone switches phones. Anyone with a game's code can open it.

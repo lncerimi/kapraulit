@@ -3,27 +3,27 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Scrabble Scorekeeper</title>
+  <title>Lunar</title>
   <meta name="description" content="Keep score, track match history and check words for your word game nights.">
-  <meta name="theme-color" content="#1b1513">
+  <meta name="theme-color" content="#3a2614">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="Scorekeeper">
+  <meta name="apple-mobile-web-app-title" content="Lunar">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <script>
-    // Apply the saved theme before first paint (dark is the default).
-    try { document.documentElement.dataset.theme = localStorage.getItem('scrabble-scorekeeper.theme') || 'dark'; }
-    catch (e) { document.documentElement.dataset.theme = 'dark'; }
+    // Apply the saved theme before first paint (light is the default).
+    try { document.documentElement.dataset.theme = localStorage.getItem('scrabble-scorekeeper.theme') || 'light'; }
+    catch (e) { document.documentElement.dataset.theme = 'light'; }
   </script>
   <link rel="stylesheet" href="app.css">
 </head>
 <body>
   <header class="topbar">
     <button class="back" data-action="back" aria-label="Back" hidden>&#8249;</button>
-    <h1 id="title">Scorekeeper</h1>
+    <h1 id="title">Lunar</h1>
     <span class="dict-status" id="dictStatus" title="Dictionary status"></span>
   </header>
   <main id="app" aria-live="polite"></main>

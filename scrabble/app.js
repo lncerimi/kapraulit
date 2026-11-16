@@ -233,14 +233,14 @@ function route() {
 function go(path) { location.hash = '#/' + path; }
 
 const TITLES = {
-  home: 'Scorekeeper', players: 'Players', player: 'Player', new: 'New game', game: 'Game',
+  home: 'Lunar', players: 'Players', player: 'Player', new: 'New game', game: 'Game',
   history: 'Match history', match: 'Match', stats: 'Stats & records', dict: 'Dictionary', settings: 'Settings',
 };
 
 function render() {
   const r = route();
   closeModal();
-  $('#title').textContent = TITLES[r.name] || 'Scorekeeper';
+  $('#title').textContent = TITLES[r.name] || 'Lunar';
   $('.back').hidden = r.name === 'home';
   const view = VIEWS[r.name] || VIEWS.home;
   $('#app').innerHTML = view(r.arg);
@@ -285,7 +285,7 @@ VIEWS.home = () => {
       </div>`;
   }
   return `
-    <div class="logo">${'SCORE'.split('').map((l) => tileHtml(l, 'n', 'lg')).join('')}</div>
+    <div class="logo"><span class="moon" aria-hidden="true"></span>${'LUNAR'.split('').map((l) => tileHtml(l, 'n', 'lg')).join('')}</div>
     ${current}
     <nav class="menu">
       <a class="btn" href="#/play"><span class="ico">▦</span> Play on this phone</a>
@@ -700,20 +700,20 @@ AFTER.dict = () => {
 
 /* Settings */
 const THEME_KEY = 'scrabble-scorekeeper.theme';
-const currentTheme = () => document.documentElement.dataset.theme || 'dark';
+const currentTheme = () => document.documentElement.dataset.theme || 'light';
 function setTheme(t) {
   document.documentElement.dataset.theme = t;
   try { localStorage.setItem(THEME_KEY, t); } catch (e) { /* private mode */ }
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.content = t === 'light' ? '#2a1a14' : '#1b1513';
+  if (meta) meta.content = t === 'light' ? '#3a2614' : '#150e09';
 }
 
 VIEWS.settings = () => `
   <div class="card">
     <h2>Appearance</h2>
     <div class="seg" role="group" aria-label="Theme">
-      <button data-action="set-theme" data-theme="dark" class="${currentTheme() === 'dark' ? 'on' : ''}">Dark</button>
       <button data-action="set-theme" data-theme="light" class="${currentTheme() === 'light' ? 'on' : ''}">Light</button>
+      <button data-action="set-theme" data-theme="dark" class="${currentTheme() === 'dark' ? 'on' : ''}">Dark</button>
     </div>
   </div>
   <div class="card">

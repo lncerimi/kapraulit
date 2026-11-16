@@ -1,4 +1,4 @@
-# Scrabble Scorekeeper
+# Lunar
 
 A score-keeping app for word game nights that installs on iPhone and Android. It has no build step and no server. Everything is plain HTML, CSS and JavaScript in this folder.
 

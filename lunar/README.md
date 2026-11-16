@@ -15,14 +15,14 @@ A score-keeping app for word game nights that installs on iPhone and Android. It
 - **Backup:** export/import a file to copy records between phones. Importing merges and never deletes.
 
 ## Using it
-Once GitHub Pages serves this branch, open `https://<user>.github.io/kapraulit/scrabble/` on each phone:
+Once GitHub Pages serves this branch, open `https://lncerimi.github.io/kapraulit/lunar/` on each phone:
 - **iPhone (Safari):** Share → *Add to Home Screen*
 - **Android (Chrome):** ⋮ → *Install app*
 
 Data is stored on the device (localStorage).
 
 ## Word list
-On first launch the app downloads the ENABLE list and caches it on the phone, so it works offline after that. To bundle the list with the app instead, run `scrabble/tools/fetch-wordlist.sh` and commit `scrabble/words.txt`.
+On first launch the app downloads the ENABLE list and caches it on the phone, so it works offline after that. To bundle the list with the app instead, run `lunar/tools/fetch-wordlist.sh` and commit `lunar/words.txt`.
 
 ## Updating
 After changing files, bump `VERSION` in `sw.js` so installed copies pick up the new version.

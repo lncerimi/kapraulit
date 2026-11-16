@@ -11,12 +11,13 @@ const WORD_MULTS = [1, 2, 3, 4, 9];
 const TILE_MODS = ['n', 'dl', 'tl', 'b']; // normal, double letter, triple letter, blank
 const PALETTE = ['#d2453b', '#2f7fc1', '#2e7d4f', '#c9962b', '#7b4fa8', '#e07a2f', '#d1588f', '#2a9d9a', '#5b3a1e', '#444444'];
 
-const STORE_KEY = 'scrabble-scorekeeper.v1';
+const STORE_KEY = 'lunar.v1';
+const OLD_STORE_KEY = 'scrabble-scorekeeper.v1'; // before the app was renamed Lunar
 // The app looks for a bundled word list first, then falls back to downloading the
 // public-domain ENABLE list once and caching it on the device for offline use.
 const DICT_LOCAL = 'words.txt';
 const DICT_REMOTE = 'https://raw.githubusercontent.com/dolph/dictionary/master/enable1.txt';
-const DICT_CACHE = 'scrabble-dict-v1';
+const DICT_CACHE = 'lunar-dict-v1';
 
 /* ---------- Storage ---------- */
 
@@ -24,7 +25,7 @@ function emptyDb() { return { version: 1, players: [], games: [], activeGameId: 
 
 function loadDb() {
   try {
-    const raw = localStorage.getItem(STORE_KEY);
+    const raw = localStorage.getItem(STORE_KEY) || localStorage.getItem(OLD_STORE_KEY);
     if (!raw) return emptyDb();
     const data = JSON.parse(raw);
     return Object.assign(emptyDb(), data);
@@ -670,7 +671,7 @@ VIEWS.dict = () => `
     <input type="search" id="dictInput" class="word-input" placeholder="Type a word" autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false" enterkeyhint="search">
     <div class="dict-result" id="dictResult"></div>
   </div>
-  <p class="muted center">Uses the ENABLE word list, a free list that is very close to the North American Scrabble list.</p>`;
+  <p class="muted center">Uses the ENABLE word list, a free list that is very close to the official North American tournament list.</p>`;
 
 function renderDictResult() {
   const input = $('#dictInput');
@@ -700,7 +701,7 @@ AFTER.dict = () => {
 };
 
 /* Settings */
-const THEME_KEY = 'scrabble-scorekeeper.theme';
+const THEME_KEY = 'lunar.theme';
 const currentTheme = () => document.documentElement.dataset.theme || 'light';
 function setTheme(t) {
   document.documentElement.dataset.theme = t;
@@ -864,10 +865,10 @@ function finishGame() {
 
 function exportData() {
   const blob = new Blob([JSON.stringify(db, null, 2)], { type: 'application/json' });
-  const name = `scrabble-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  const name = `lunar-backup-${new Date().toISOString().slice(0, 10)}.json`;
   const file = new File([blob], name, { type: 'application/json' });
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    navigator.share({ files: [file], title: 'Scrabble scores backup' }).catch(() => {});
+    navigator.share({ files: [file], title: 'Lunar backup' }).catch(() => {});
     return;
   }
   const a = document.createElement('a');

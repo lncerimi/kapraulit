@@ -133,13 +133,15 @@ const currentPlayerId = (game) => game.playerIds[game.turns.length % game.player
 const activeGame = () => db.games.find((g) => g.id === db.activeGameId && !g.finished) || null;
 
 function describeTurn(t) {
-  if (t.type === 'pass') return '<span class="muted">Pass / exchange</span>';
+  if (t.type === 'exchange') return `<span class="muted">Swapped ${t.n || ''} tile${t.n === 1 ? '' : 's'}</span>`;
+  if (t.type !== 'play') return '<span class="muted">Pass / exchange</span>';
   if (t.manual != null) {
     const words = t.words.filter((w) => w.text).map((w) => esc(w.text)).join(', ');
     return `${words ? words + ' · ' : ''}<span class="muted">entered points</span>`;
   }
-  const parts = t.words.filter((w) => w.text).map((w) => `${esc(w.text)} <span class="muted">${scoreWord(w)}</span>`);
-  return parts.join(' + ') + (t.bingo ? ' <span class="badge">BINGO +50</span>' : '');
+  const parts = t.words.filter((w) => w.text).map((w) => `${esc(w.text)} <span class="muted">${w.pts != null ? w.pts : scoreWord(w)}</span>`);
+  const bonus = t.words.some((w) => w.pts != null) ? 'ALL 7 +40' : 'BINGO +50';
+  return parts.join(' + ') + (t.bingo ? ` <span class="badge">${bonus}</span>` : '');
 }
 
 /* ---------- Dictionary ---------- */
@@ -271,11 +273,23 @@ VIEWS.home = () => {
         <a class="btn block" href="#/game">Continue game</a>
       </div>`;
   }
+  const pg = db.phone;
+  if (pg) {
+    current += `
+      <div class="card">
+        <h2>Tile Table game in progress</h2>
+        <div class="row" style="margin-bottom:12px">
+          ${pg.players.map((p) => `<span style="--pc:${esc(p.color)}"><span class="dot"></span> ${esc(p.name)} <b>${pg.scores[p.id]}</b></span>`).join('<span class="muted">·</span>')}
+        </div>
+        <a class="btn block" href="#/board">Continue playing</a>
+      </div>`;
+  }
   return `
     <div class="logo">${'SCORE'.split('').map((l) => tileHtml(l, 'n', 'lg')).join('')}</div>
     ${current}
     <nav class="menu">
-      <a class="btn" href="#/new"><span class="ico">＋</span> New game</a>
+      <a class="btn" href="#/play"><span class="ico">▦</span> Play on this phone</a>
+      <a class="btn" href="#/new"><span class="ico">＋</span> Keep score (real board)</a>
       <a class="btn secondary" href="#/dict"><span class="ico">📖</span> Check a word</a>
       <a class="btn secondary" href="#/history"><span class="ico">🗂</span> Match history</a>
       <a class="btn secondary" href="#/stats"><span class="ico">🏆</span> Stats & records</a>
@@ -534,7 +548,7 @@ VIEWS.match = (id) => {
         <thead><tr><th>Player</th><th>Turns</th><th>Tiles</th><th>Final</th><th>Best</th><th>Bingos</th></tr></thead>
         <tbody>${rows}</tbody>
       </table></div>
-      <p class="hint">“Tiles” is the leftover-tile adjustment at the end of the game.</p>
+      <p class="hint">${g.mode === 'phone' ? 'Played on this phone (Tile Table). ' : ''}“Tiles” is the leftover-tile adjustment at the end of the game.</p>
     </div>
     <div class="card"><h2>Turns</h2>${g.turns.length ? `<ul class="list turnlog">${log}</ul>` : '<p class="empty">No turns recorded.</p>'}</div>
     <button class="btn danger small" data-action="delete-match" data-id="${g.id}">Delete this match</button>`;
@@ -570,7 +584,7 @@ function computeStats() {
     g.turns.forEach((t) => {
       const s = ensure(g, t.playerId);
       if (t.bingo) s.bingos++;
-      if (t.type === 'pass') return;
+      if (t.type !== 'play') return;
       if (!s.bestTurn || t.score > s.bestTurn.score) s.bestTurn = { score: t.score, turn: t, g };
       if (!topTurn || t.score > topTurn.score) topTurn = { score: t.score, turn: t, pid: t.playerId, g };
     });

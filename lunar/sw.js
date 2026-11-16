@@ -1,6 +1,6 @@
 // Offline support: load the latest app when online, the saved copy when offline.
 // Bump VERSION when shipping changes so phones pick up the new files.
-const VERSION = 'v6';
+const VERSION = 'v7';
 const CACHE = 'lunar-' + VERSION;
 const SHELL = [
   './',

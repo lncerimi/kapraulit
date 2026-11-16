@@ -424,18 +424,17 @@ const TT = (() => {
   /* ---------- Online play (two phones) ---------- */
 
   const API = (window.LUNAR_API || 'https://lunar-games-api.netlify.app') + '/api/game/';
-  const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
-
+  // Join codes look like LUNAR-482917: the app name plus six random digits.
+  const CODE_RE = /^LUNAR-[0-9]{6}$/;
   function newCode() {
-    const a = new Uint32Array(8);
+    const a = new Uint32Array(1);
     crypto.getRandomValues(a);
-    let s = '';
-    a.forEach((x, i) => { s += CODE_CHARS[x % CODE_CHARS.length]; if (i === 3) s += '-'; });
-    return s;
+    return 'LUNAR-' + String(a[0] % 1000000).padStart(6, '0');
   }
+  // Accepts "LUNAR-482917", "lunar 482917" or just "482917".
   function normalizeCode(raw) {
-    const c = String(raw || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-    return c.length === 8 ? `${c.slice(0, 4)}-${c.slice(4)}` : c;
+    const digits = String(raw || '').replace(/\D/g, '');
+    return digits.length === 6 ? 'LUNAR-' + digits : String(raw || '').trim().toUpperCase();
   }
 
   async function api(method, code, body) {
@@ -937,9 +936,9 @@ const TT = (() => {
   VIEWS.join = (code) => `
     <div class="card">
       <h2>Join a game</h2>
-      <p class="muted">Enter the code shown on the other phone.</p>
+      <p class="muted">Enter the code shown on the other phone. Just the 6 numbers is fine.</p>
       <div class="row">
-        <input type="text" id="joinCode" class="word-input" placeholder="ABCD-1234" value="${esc(normalizeCode(code || ''))}" autocomplete="off" autocapitalize="characters" spellcheck="false" style="flex:1">
+        <input type="text" id="joinCode" class="word-input" placeholder="LUNAR-482917" value="${esc(normalizeCode(code || ''))}" autocomplete="off" autocapitalize="characters" spellcheck="false" inputmode="text" style="flex:1">
         <button class="btn" data-g="find">Find</button>
       </div>
       <div id="joinResult" style="margin-top:12px"></div>
@@ -952,7 +951,7 @@ const TT = (() => {
   async function findGame(raw) {
     const code = normalizeCode(raw);
     const out = $('#joinResult');
-    if (!/^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(code)) { out.innerHTML = '<p class="verdict no">Codes look like ABCD-1234.</p>'; return; }
+    if (!CODE_RE.test(code)) { out.innerHTML = '<p class="verdict no">Codes look like LUNAR-482917. You can type just the 6 numbers.</p>'; return; }
     if (onlineMeta(code)) { go('online/' + code); return; }
     out.innerHTML = '<p class="muted">Looking for the game…</p>';
     let r;

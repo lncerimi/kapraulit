@@ -2,7 +2,7 @@ import { getStore } from "@netlify/blobs";
 import type { Config, Context } from "@netlify/functions";
 
 /*
- * Shared turn-based games for Lunar, keyed by a join code like "K7QM-93PX".
+ * Shared turn-based games for Lunar, keyed by a join code like "LUNAR-482917".
  *   GET  /api/game/:code              -> { game, etag }          (404 if unknown)
  *   PUT  /api/game/:code { game, etag } -> { etag }               (create when etag is null)
  *        409 { game, etag } when the stored game changed since `etag` (the other phone moved).
@@ -13,7 +13,7 @@ const ALLOWED_ORIGINS = new Set([
   "https://lncerimi.github.io",
   "http://localhost:8765",
 ]);
-const CODE_RE = /^[A-Z0-9]{4}-[A-Z0-9]{4}$/;
+const CODE_RE = /^LUNAR-[0-9]{6}$/;
 const MAX_BYTES = 200_000;
 
 function cors(req: Request): Record<string, string> {

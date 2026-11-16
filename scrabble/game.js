@@ -528,7 +528,7 @@ const TT = (() => {
       <div class="scoreboard mini">${scores}</div>
       <div class="board-wrap ${ui.zoom ? 'zoomed' : ''}" id="boardWrap"><div class="board">${cells}</div></div>
       <div class="row" style="margin:6px 0 10px">
-        <span class="muted" style="color:var(--tile)">${g.bag.length} tiles in bag</span>
+        <span class="bag-count">${g.bag.length} tiles in bag</span>
         <span class="spacer"></span>
         <button class="btn ghost small light" data-g="zoom">${ui.zoom ? 'Zoom out' : 'Zoom in'}</button>
         <button class="btn ghost small light" data-g="menu">⋯</button>

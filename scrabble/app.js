@@ -289,7 +289,7 @@ VIEWS.home = () => {
     ${current}
     <nav class="menu">
       <a class="btn" href="#/play"><span class="ico">▦</span> Play on this phone</a>
-      <a class="btn" href="#/new"><span class="ico">＋</span> Keep score (real board)</a>
+      <a class="btn secondary" href="#/new"><span class="ico">＋</span> Keep score (real board)</a>
       <a class="btn secondary" href="#/dict"><span class="ico">📖</span> Check a word</a>
       <a class="btn secondary" href="#/history"><span class="ico">🗂</span> Match history</a>
       <a class="btn secondary" href="#/stats"><span class="ico">🏆</span> Stats & records</a>
@@ -699,7 +699,23 @@ AFTER.dict = () => {
 };
 
 /* Settings */
+const THEME_KEY = 'scrabble-scorekeeper.theme';
+const currentTheme = () => document.documentElement.dataset.theme || 'dark';
+function setTheme(t) {
+  document.documentElement.dataset.theme = t;
+  try { localStorage.setItem(THEME_KEY, t); } catch (e) { /* private mode */ }
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.content = t === 'light' ? '#2a1a14' : '#1b1513';
+}
+
 VIEWS.settings = () => `
+  <div class="card">
+    <h2>Appearance</h2>
+    <div class="seg" role="group" aria-label="Theme">
+      <button data-action="set-theme" data-theme="dark" class="${currentTheme() === 'dark' ? 'on' : ''}">Dark</button>
+      <button data-action="set-theme" data-theme="light" class="${currentTheme() === 'light' ? 'on' : ''}">Light</button>
+    </div>
+  </div>
   <div class="card">
     <h2>Install on your phone</h2>
     <p><b>iPhone (Safari):</b> tap the Share button, then <i>Add to Home Screen</i>.</p>
@@ -1010,6 +1026,7 @@ document.addEventListener('click', (e) => {
 
     case 'retry-dict': Dict.load(true); if (route().name === 'settings') setTimeout(render, 0); break;
     case 'export': exportData(); break;
+    case 'set-theme': setTheme(el.dataset.theme); render(); break;
     case 'wipe':
       confirmModal('Delete <b>all</b> players and games on this phone? Export a backup first if you want to keep them.', 'Delete everything', () => {
         db = emptyDb();

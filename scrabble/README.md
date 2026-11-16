@@ -26,3 +26,13 @@ On first launch the app downloads the ENABLE list and caches it on the phone, so
 
 ## Updating
 After changing files, bump `VERSION` in `sw.js` so installed copies pick up the new version.
+
+## Tile Table (play on this phone)
+An original crossword tile game, separate from the scorekeeper. It has its own board layout, tile set and letter values.
+- **Players:** 2–4, any mix of people and computer opponents (Easy, Medium, Hard).
+- **Pass the phone:** each person's tiles stay hidden behind a "pass the phone" screen between turns.
+- **Word check:** every word is checked against the dictionary before it can be played.
+- **Bonuses:** squares for 2× / 3× letter and word. Using all 7 tiles earns +40.
+- **History:** finished games go into the same match history and stats as the scorekeeper.
+
+The game logic is in `game.js`. Board layout, tile counts and values are at the top of that file.

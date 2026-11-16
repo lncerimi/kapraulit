@@ -1,0 +1,5 @@
+# Netlify project for Lunar's online (two-phone) games.
+# The app itself is served from GitHub Pages; this only hosts the game API.
+[build]
+  publish = "public"
+  functions = "netlify/functions"

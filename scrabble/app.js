@@ -287,8 +287,9 @@ VIEWS.home = () => {
   return `
     <div class="logo"><span class="moon" aria-hidden="true"></span>${'LUNAR'.split('').map((l) => tileHtml(l, 'n', 'lg')).join('')}</div>
     ${current}
+    ${typeof TT !== 'undefined' ? TT.homeCards() : ''}
     <nav class="menu">
-      <a class="btn" href="#/play"><span class="ico">▦</span> Play on this phone</a>
+      <a class="btn" href="#/play"><span class="ico">▦</span> Play Tile Table</a>
       <a class="btn secondary" href="#/new"><span class="ico">＋</span> Keep score (real board)</a>
       <a class="btn secondary" href="#/dict"><span class="ico">📖</span> Check a word</a>
       <a class="btn secondary" href="#/history"><span class="ico">🗂</span> Match history</a>
@@ -548,7 +549,7 @@ VIEWS.match = (id) => {
         <thead><tr><th>Player</th><th>Turns</th><th>Tiles</th><th>Final</th><th>Best</th><th>Bingos</th></tr></thead>
         <tbody>${rows}</tbody>
       </table></div>
-      <p class="hint">${g.mode === 'phone' ? 'Played on this phone (Tile Table). ' : ''}“Tiles” is the leftover-tile adjustment at the end of the game.</p>
+      <p class="hint">${g.mode === 'phone' ? 'Played on this phone (Tile Table). ' : g.mode === 'online' ? 'Played online on two phones (Tile Table). ' : ''}“Tiles” is the leftover-tile adjustment at the end of the game.</p>
     </div>
     <div class="card"><h2>Turns</h2>${g.turns.length ? `<ul class="list turnlog">${log}</ul>` : '<p class="empty">No turns recorded.</p>'}</div>
     <button class="btn danger small" data-action="delete-match" data-id="${g.id}">Delete this match</button>`;

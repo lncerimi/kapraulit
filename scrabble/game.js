@@ -305,7 +305,10 @@ const TT = (() => {
 
   /* ---------- Game state ---------- */
 
-  const gameOf = () => db.phone || null;
+  // The board screen shows either the one-phone game or an online game (by join code).
+  let activeCode = null;
+  const onlineMeta = (code = activeCode) => (code && db.online ? db.online[code] || null : null);
+  const gameOf = () => (activeCode ? (onlineMeta() ? onlineMeta().game : null) : (db.phone || null));
 
   function newGame(players) {
     const bag = [];
@@ -373,6 +376,27 @@ const TT = (() => {
     if (g.scoreless >= g.players.length * 3) return endGame(g, null);
     g.turn = (g.turn + 1) % g.players.length;
     save();
+    if (g.code) pushOnline(g.code);
+  }
+
+  const endMessage = (outId, reason) => (outId ? 'Game over! Saved to your history.'
+    : reason === 'manual' ? 'Game ended and saved to your history.'
+      : 'Game over: everyone passed or swapped three turns in a row. Saved to your history.');
+
+  // History record for a finished game. mapId translates another phone's player ids to this phone's.
+  function buildRecord(g, adjust, endedAt, mapId = (id) => id) {
+    return {
+      id: g.id,
+      mode: g.code ? 'online' : 'phone',
+      startedAt: g.startedAt,
+      endedAt,
+      finished: true,
+      playerIds: g.players.map((p) => mapId(p.id)),
+      players: g.players.map((p) => ({ id: mapId(p.id), name: p.name, color: p.color })),
+      turns: g.log.map((t) => ({ ...t, playerId: mapId(t.playerId) })),
+      adjust: Object.fromEntries(Object.keys(adjust).map((k) => [mapId(k), adjust[k]])),
+      leftovers: Object.fromEntries(g.players.map((p) => [mapId(p.id), g.racks[p.id].join('')])),
+    };
   }
 
   function endGame(g, outId, reason = 'scoreless') {
@@ -380,26 +404,219 @@ const TT = (() => {
     let pool = 0;
     g.players.forEach((p) => { const v = rackVal(g.racks[p.id]); adjust[p.id] = -v; pool += v; });
     if (outId) adjust[outId] += pool;
-    const record = {
-      id: g.id,
-      mode: 'phone',
-      startedAt: g.startedAt,
-      endedAt: Date.now(),
-      finished: true,
-      playerIds: g.players.map((p) => p.id),
-      players: g.players.map((p) => ({ id: p.id, name: p.name, color: p.color })),
-      turns: g.log,
-      adjust,
-      leftovers: Object.fromEntries(g.players.map((p) => [p.id, g.racks[p.id].join('')])),
-    };
+    if (g.code) {
+      // Online: mark the shared game as over; each phone files it into its own history once synced.
+      g.over = { outId, reason, adjust, endedAt: Date.now() };
+      save();
+      pushOnline(g.code);
+      return true;
+    }
+    const record = buildRecord(g, adjust, Date.now());
     db.games.push(record);
     db.phone = null;
     resetUi();
     save();
     go('match/' + record.id);
-    toast(outId ? 'Game over! Saved to your history.' : reason === 'manual' ? 'Game ended and saved to your history.' : 'Game over: everyone passed or swapped three turns in a row. Saved to your history.');
+    toast(endMessage(outId, reason));
     return true;
   }
+
+  /* ---------- Online play (two phones) ---------- */
+
+  const API = (window.LUNAR_API || 'https://lunar-games-api.netlify.app') + '/api/game/';
+  const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+
+  function newCode() {
+    const a = new Uint32Array(8);
+    crypto.getRandomValues(a);
+    let s = '';
+    a.forEach((x, i) => { s += CODE_CHARS[x % CODE_CHARS.length]; if (i === 3) s += '-'; });
+    return s;
+  }
+  function normalizeCode(raw) {
+    const c = String(raw || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    return c.length === 8 ? `${c.slice(0, 4)}-${c.slice(4)}` : c;
+  }
+
+  async function api(method, code, body) {
+    const res = await fetch(API + encodeURIComponent(code), {
+      method,
+      cache: 'no-store',
+      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    let data = null;
+    try { data = await res.json(); } catch (e) { /* empty body */ }
+    return { status: res.status, data };
+  }
+
+  function adopt(code, game, etag) {
+    const meta = onlineMeta(code);
+    game.code = code;
+    meta.game = game;
+    meta.etag = etag;
+    meta.dirty = false;
+  }
+
+  function refreshIfViewing(code) {
+    if (route().name === 'online' && activeCode === code && onlineMeta(code)) refresh();
+  }
+
+  // Send this phone's copy of the game to the service.
+  async function pushOnline(code) {
+    const meta = onlineMeta(code);
+    if (!meta) return 'gone';
+    meta.dirty = true;
+    save();
+    try {
+      const r = await api('PUT', code, { game: meta.game, etag: meta.etag });
+      if (r.status === 200) {
+        meta.etag = r.data.etag; meta.dirty = false; save();
+        if (meta.game.over) finishOnline(code);
+        return 'ok';
+      }
+      if (r.status === 409 && r.data && r.data.game) {
+        adopt(code, r.data.game, r.data.etag); save();
+        toast('The game changed on the other phone, so this phone was updated to match.');
+        if (meta.game.over) finishOnline(code); else refreshIfViewing(code);
+        return 'conflict';
+      }
+      throw new Error('HTTP ' + r.status);
+    } catch (e) {
+      toast("Saved on this phone. It'll sync when you're back online.");
+      refreshIfViewing(code);
+      return 'offline';
+    }
+  }
+
+  // Fetch the latest copy from the service (sending ours first if it hasn't gone out yet).
+  async function pullOnline(code) {
+    const meta = onlineMeta(code);
+    if (!meta) return 'gone';
+    if (meta.dirty) {
+      const p = await pushOnline(code);
+      if (p === 'offline') return 'offline';
+      if (p === 'conflict') return 'changed';
+      if (!onlineMeta(code)) return 'changed';
+    }
+    try {
+      const r = await api('GET', code);
+      if (r.status === 404) return 'missing';
+      if (r.status !== 200) return 'offline';
+      if (r.data.etag === meta.etag) return 'same';
+      adopt(code, r.data.game, r.data.etag); save();
+      if (meta.game.over) finishOnline(code);
+      return 'changed';
+    } catch (e) { return 'offline'; }
+  }
+
+  // Once a shared game is over and synced: file it in this phone's history and drop it from the list.
+  function finishOnline(code) {
+    const meta = onlineMeta(code);
+    if (!meta || !meta.game.over || meta.dirty) return;
+    const g = meta.game; const o = g.over;
+    const mapId = (id) => (meta.map && meta.map[id]) || id;
+    if (!db.games.some((x) => x.id === g.id)) db.games.push(buildRecord(g, o.adjust, o.endedAt, mapId));
+    delete db.online[code];
+    save();
+    if (route().name === 'online' && activeCode === code) {
+      resetUi();
+      go('match/' + g.id);
+      toast(endMessage(o.outId, o.reason));
+    } else if (route().name === 'home') render();
+  }
+
+  async function publishOnline(g, me) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const code = newCode();
+      g.code = code;
+      let r;
+      try { r = await api('PUT', code, { game: g, etag: null }); } catch (e) { delete g.code; throw e; }
+      if (r.status === 200) {
+        db.online = db.online || {};
+        db.online[code] = { code, me, etag: r.data.etag, game: g, map: {}, dirty: false, joinedAt: Date.now() };
+        save();
+        return code;
+      }
+      if (r.status !== 409) { delete g.code; throw new Error('HTTP ' + r.status); }
+    }
+    delete g.code;
+    throw new Error('Could not get a free game code');
+  }
+
+  const joinUrl = (code) => `${location.origin}${location.pathname}#/join/${code}`;
+
+  function showShare(code) {
+    openModal(`<h2>Game code</h2>
+      <p class="muted">On the other phone, open Lunar → Play → <b>Join a game</b> and enter this code, or send them the link.</p>
+      <div class="code-big">${esc(code)}</div>
+      <div class="row end" style="margin-top:12px">
+        <button class="btn ghost" data-action="close-modal">Done</button>
+        <button class="btn" id="shareCode">Send to the other phone</button>
+      </div>`);
+    $('#shareCode').addEventListener('click', async () => {
+      const text = `Join my Lunar game! Code: ${code}`;
+      try {
+        if (navigator.share) await navigator.share({ title: 'Lunar', text, url: joinUrl(code) });
+        else { await navigator.clipboard.writeText(`${text}\n${joinUrl(code)}`); toast('Copied. Paste it in a text to the other player.'); }
+      } catch (e) { /* share sheet closed */ }
+    });
+  }
+
+  let pollTimer = null;
+  function startPolling(code) {
+    clearInterval(pollTimer);
+    pollTimer = setInterval(() => {
+      if (route().name !== 'online' || activeCode !== code || !onlineMeta(code)) { clearInterval(pollTimer); return; }
+      const meta = onlineMeta(code);
+      const waiting = current(meta.game).id !== meta.me;
+      if ((waiting || meta.dirty) && $('#modal').hidden && document.visibilityState === 'visible') syncAndRefresh(code);
+    }, 8000);
+  }
+
+  async function syncAndRefresh(code, manual = false) {
+    const r = await pullOnline(code);
+    const meta = onlineMeta(code);
+    if (!(route().name === 'online' && activeCode === code && meta)) return;
+    if (r === 'changed') {
+      ui.pending = []; ui.sel = null;
+      if (current(meta.game).id === meta.me) ui.msg = 'Your turn!';
+      refresh();
+    } else if (manual) {
+      toast(r === 'offline' ? "Couldn't reach the game service. Check your connection." : r === 'missing' ? 'This game is no longer on the server.' : 'No new moves yet.');
+      refresh();
+    }
+  }
+
+  let lastHomeSync = 0;
+  async function refreshAllOnline() {
+    const codes = Object.keys(db.online || {});
+    if (!codes.length || Date.now() - lastHomeSync < 3000) return;
+    lastHomeSync = Date.now();
+    const results = await Promise.all(codes.map((c) => pullOnline(c)));
+    if (results.includes('changed') && route().name === 'home') render();
+  }
+
+  function homeCards() {
+    const list = Object.values(db.online || {}).sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0));
+    if (!list.length) return '';
+    return `<div class="card"><h2>Online games</h2><ul class="list">${list.map((m) => {
+      const g = m.game; const cur = current(g); const mine = cur.id === m.me;
+      const others = g.players.filter((p) => p.id !== m.me).map((p) => esc(p.name)).join(', ');
+      const scores = g.players.map((p) => `${esc(p.name)} ${g.scores[p.id]}`).join(' · ');
+      return `<li><button class="linkish" data-g="open-online" data-code="${esc(m.code)}">
+        <span class="grow"><b>vs ${others}</b><div class="muted">${scores}</div></span>
+        ${mine ? '<span class="badge gold">Your turn!</span>' : `<span class="muted">${esc(cur.name)}'s turn</span>`}
+      </button></li>`;
+    }).join('')}</ul></div>`;
+  }
+  AFTER.home = () => { refreshAllOnline(); };
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    if (route().name === 'home') { lastHomeSync = 0; refreshAllOnline(); }
+    if (route().name === 'online' && activeCode) syncAndRefresh(activeCode);
+  });
 
   /* ---------- UI state ---------- */
 
@@ -409,22 +626,30 @@ const TT = (() => {
 
   const current = (g) => g.players[g.turn];
   const humanCount = (g) => g.players.filter((p) => !isCpu(p.id)).length;
-  const needsCover = (g) => !isCpu(current(g).id) && humanCount(g) > 1 && ui.revealed !== g.moveNo;
+  const needsCover = (g) => !g.code && !isCpu(current(g).id) && humanCount(g) > 1 && ui.revealed !== g.moveNo;
 
   // Rack letters still in hand (not yet placed on the board this turn)
   function handIndexes(g) {
     const used = new Set(ui.pending.map((p) => p.ri));
-    return g.racks[current(g).id].map((l, i) => i).filter((i) => !used.has(i));
+    return g.racks[handOwner(g)].map((l, i) => i).filter((i) => !used.has(i));
   }
+  const handOwner = (g) => (g.code && onlineMeta(g.code) ? onlineMeta(g.code).me : current(g).id);
+  const isMyTurn = (g) => !g.code || !onlineMeta(g.code) || current(g).id === onlineMeta(g.code).me;
 
   /* ---------- Views ---------- */
 
-  TITLES.play = 'Play on this phone';
+  TITLES.play = 'Play';
   TITLES.board = GAME_NAME;
+  TITLES.online = GAME_NAME;
+  TITLES.join = 'Join a game';
 
   let pickSel = [];
+  let pickMode = 'phone';
+  let meSel = null;
   VIEWS.play = () => {
     const humans = db.players;
+    if (pickMode === 'online') pickSel = pickSel.filter((id) => !isCpu(id));
+    if (!pickSel.includes(meSel)) meSel = pickSel.find((id) => !isCpu(id)) || null;
     const cpus = Object.keys(CPU_LEVELS).map((k) => ({ id: 'cpu-' + k, ...CPU_LEVELS[k] }));
     pickSel = pickSel.filter((id) => isCpu(id) || playerById(id));
     const row = (p) => {
@@ -432,19 +657,30 @@ const TT = (() => {
       return `<div class="pick ${n >= 0 ? 'on' : ''}" style="--pc:${esc(p.color)}" data-g="pick" data-id="${p.id}" role="button" tabindex="0">
         <span class="dot"></span> ${esc(p.name)} <span class="order">${n >= 0 ? n + 1 : ''}</span></div>`;
     };
-    const warn = gameOf() ? '<p class="muted">Starting a new game replaces the game in progress.</p>' : '';
+    const online = pickMode === 'online';
+    const warn = !online && db.phone ? '<p class="muted">Starting a new one-phone game replaces the one in progress.</p>' : '';
+    const meRow = online && pickSel.length ? `<h3>Which one is you?</h3><div class="row">${pickSel.map((id) => {
+      const p = playerById(id);
+      return `<button class="chip ${meSel === id ? 'on bingo' : ''}" data-g="me" data-id="${id}">${esc(p ? p.name : id)}</button>`;
+    }).join('')}</div>` : '';
     return `
       <div class="card">
         <h2>${GAME_NAME}</h2>
-        <p class="muted">An original crossword tile game. Tap players in turn order (2–4). With two or more people, pass the phone and your letters stay hidden between turns.</p>
+        <div class="seg" role="group" aria-label="Where to play" style="margin-bottom:12px">
+          <button data-g="mode" data-mode="phone" class="${online ? '' : 'on'}">One phone</button>
+          <button data-g="mode" data-mode="online" class="${online ? 'on' : ''}">Two phones</button>
+        </div>
+        <p class="muted">${online
+          ? 'Each person plays on their own phone, anywhere. Tap the players in turn order, then send the game code to the other phone.'
+          : 'Tap players in turn order (2–4). With two or more people, pass the phone and your letters stay hidden between turns.'}</p>
         <h3>People</h3>
         ${humans.length ? humans.map(row).join('') : '<p class="muted">No players yet.</p>'}
         <a href="#/player/new" class="muted">＋ Add a player</a>
-        <h3>Computer</h3>
-        ${cpus.map(row).join('')}
+        ${online ? meRow : `<h3>Computer</h3>${cpus.map(row).join('')}`}
       </div>
       ${warn}
-      <button class="btn block" data-g="start" ${pickSel.length >= 2 && pickSel.length <= 4 ? '' : 'disabled'}>Deal tiles</button>
+      <button class="btn block" data-g="start" ${pickSel.length >= 2 && pickSel.length <= 4 ? '' : 'disabled'}>${online ? 'Create online game' : 'Deal tiles'}</button>
+      <a class="btn secondary block" href="#/join" style="margin-top:10px">Have a code? Join a game</a>
       <div class="card" style="margin-top:16px">
         <h2>How to play</h2>
         <ul class="muted" style="padding-left:18px;margin:0">
@@ -457,10 +693,14 @@ const TT = (() => {
       </div>`;
   };
 
-  VIEWS.board = () => {
+  VIEWS.board = () => { activeCode = null; return boardHtml(); };
+  VIEWS.online = (code) => { activeCode = normalizeCode(code); return boardHtml(); };
+
+  function boardHtml() {
     const g = gameOf();
     if (!g) return `<div class="card center"><p>No game in progress.</p><a class="btn" href="#/play">Start a game</a></div>`;
     const cur = current(g);
+    const meta = g.code ? onlineMeta(g.code) : null;
     const cpuTurn = isCpu(cur.id);
     const cover = needsCover(g);
     const pendMap = new Map(ui.pending.map((p) => [idx(p.r, p.c), p]));
@@ -468,7 +708,7 @@ const TT = (() => {
 
     const scores = g.players.map((p, i) => `
       <div class="pcard mini ${i === g.turn ? 'active' : ''}" style="--pc:${esc(p.color)}">
-        <div class="name">${esc(p.name)}</div><div class="score">${g.scores[p.id]}</div>
+        <div class="name">${esc(p.name)}${meta && p.id === meta.me ? ' <span class="muted">(you)</span>' : ''}</div><div class="score">${g.scores[p.id]}</div>
       </div>`).join('');
 
     let cells = '';
@@ -499,7 +739,13 @@ const TT = (() => {
     }
 
     let rackArea;
-    if (cpuTurn) {
+    if (meta && !isMyTurn(g)) {
+      const mine = g.racks[meta.me] || [];
+      rackArea = `
+        <div class="preview"><span class="muted">Waiting for <b>${esc(cur.name)}</b> to play…</span></div>
+        <div class="rack">${mine.map((l) => `<span class="tile lg ${l === '?' ? 'blank' : ''}">${l === '?' ? '' : l}<sub>${VAL[l] || ''}</sub></span>`).join('')}</div>
+        <div class="row" style="justify-content:center"><button class="btn secondary small" data-g="sync">Check for their move</button></div>`;
+    } else if (cpuTurn) {
       rackArea = `<div class="card center"><p><b>${esc(cur.name)}</b> is thinking…</p></div>`;
     } else if (cover) {
       const lastLog = g.log[g.log.length - 1];
@@ -509,7 +755,7 @@ const TT = (() => {
         <p style="font-size:1.1rem">Pass the phone to <b>${esc(cur.name)}</b></p>
         <button class="btn" data-g="reveal">I'm ${esc(cur.name)}, show my tiles</button></div>`;
     } else {
-      const rack = g.racks[cur.id];
+      const rack = g.racks[handOwner(g)];
       const hand = handIndexes(g);
       rackArea = `
         <div class="preview">${preview || '<span class="muted">Tap a tile, then a square.</span>'}</div>
@@ -533,7 +779,19 @@ const TT = (() => {
         <button class="btn ghost small light" data-g="zoom">${ui.zoom ? 'Zoom out' : 'Zoom in'}</button>
         <button class="btn ghost small light" data-g="menu">⋯</button>
       </div>
-      ${rackArea}`;
+      ${rackArea}
+      ${meta ? `<p class="sync-line">Online game <b>${esc(g.code)}</b> · ${meta.dirty
+        ? 'not synced yet <button class="btn ghost small" data-g="sync">Retry</button>'
+        : 'synced'}</p>` : ''}`;
+  }
+
+  AFTER.online = (code) => {
+    const c = normalizeCode(code);
+    if (ui.share === c) { ui.share = null; showShare(c); }
+    if (!onlineMeta(c)) return;
+    if (ui.msg) { toast(ui.msg); ui.msg = ''; }
+    startPolling(c);
+    syncAndRefresh(c);
   };
 
   AFTER.board = () => {
@@ -547,11 +805,11 @@ const TT = (() => {
   function refresh() {
     const wrap = $('#boardWrap');
     const sx = wrap ? wrap.scrollLeft : 0; const sy = wrap ? wrap.scrollTop : 0; const wy = window.scrollY;
-    $('#app').innerHTML = VIEWS.board();
+    $('#app').innerHTML = boardHtml();
     const w2 = $('#boardWrap');
     if (w2) { w2.scrollLeft = sx; w2.scrollTop = sy; }
     window.scrollTo(0, wy);
-    AFTER.board();
+    if (activeCode) { if (ui.msg) { toast(ui.msg); ui.msg = ''; } } else AFTER.board();
   }
 
   async function runCpu() {
@@ -598,7 +856,7 @@ const TT = (() => {
   }
 
   function openExchange(g) {
-    const rack = g.racks[current(g).id];
+    const rack = g.racks[handOwner(g)];
     const chosen = new Set();
     openModal(`<h2>Swap tiles</h2><p class="muted">Pick the tiles to put back in the bag. You'll draw new ones and lose this turn.</p>
       <div class="rack">${rack.map((l, i) => `<button class="tile lg ${l === '?' ? 'blank' : ''}" data-x="${i}">${l === '?' ? '' : l}<sub>${VAL[l] || ''}</sub></button>`).join('')}</div>
@@ -618,17 +876,114 @@ const TT = (() => {
   }
 
   function openMenu(g) {
+    if (g.code) {
+      openModal(`<h2>Game options</h2>
+        <div class="menu">
+          <button class="btn secondary" id="mShare">Show game code</button>
+          <button class="btn secondary" id="mEnd">End game now & save</button>
+          <button class="btn danger" id="mLeave">Remove from this phone</button>
+          <button class="btn ghost" data-action="close-modal">Back to game</button>
+        </div>
+        <p class="muted">Ending now ends it on both phones and subtracts everyone's remaining tiles. Removing only takes it off this phone. You can rejoin with the code.</p>`);
+      $('#mShare').addEventListener('click', () => showShare(g.code));
+      $('#mEnd').addEventListener('click', () => { closeModal(); endGame(g, null, 'manual'); });
+      $('#mLeave').addEventListener('click', () => {
+        confirmModal('Remove this online game from this phone? The other phone keeps it.', 'Remove', () => {
+          delete db.online[g.code]; resetUi(); save(); go('');
+        });
+      });
+      return;
+    }
+    const allPeople = g.players.every((p) => !isCpu(p.id));
     openModal(`<h2>Game options</h2>
       <div class="menu">
+        ${allPeople ? '<button class="btn" id="mOnline">Continue on two phones</button>' : ''}
         <button class="btn secondary" id="mEnd">End game now & save</button>
         <button class="btn danger" id="mDiscard">Discard game</button>
         <button class="btn ghost" data-action="close-modal">Back to game</button>
       </div>
-      <p class="muted">Ending now subtracts everyone's remaining tiles, as if no one went out.</p>`);
+      <p class="muted">${allPeople ? 'Continue on two phones moves this game online so you can each play from your own phone. ' : ''}Ending now subtracts everyone's remaining tiles, as if no one went out.</p>`);
+    if (allPeople) $('#mOnline').addEventListener('click', () => chooseSeatAndPublish(g));
     $('#mEnd').addEventListener('click', () => { closeModal(); endGame(g, null, 'manual'); });
     $('#mDiscard').addEventListener('click', () => {
       confirmModal('Discard this game? It will not be saved.', 'Discard', () => { db.phone = null; resetUi(); save(); go(''); });
     });
+  }
+
+  function chooseSeatAndPublish(g) {
+    openModal(`<h2>Continue on two phones</h2><p class="muted">Which player is on <b>this</b> phone?</p>
+      <div class="menu">${g.players.map((p) => `<button class="btn secondary" data-seat="${esc(p.id)}" style="--pc:${esc(p.color)}"><span class="dot"></span> ${esc(p.name)}</button>`).join('')}</div>
+      <div class="row end" style="margin-top:12px"><button class="btn ghost" data-action="close-modal">Cancel</button></div>`);
+    $$('[data-seat]').forEach((b) => b.addEventListener('click', async () => {
+      $$('[data-seat]').forEach((x) => { x.disabled = true; });
+      try {
+        const code = await publishOnline(g, b.dataset.seat);
+        if (db.phone === g) db.phone = null;
+        resetUi();
+        ui.share = code;
+        save();
+        closeModal();
+        go('online/' + code);
+      } catch (e) {
+        closeModal();
+        toast("Couldn't reach the game service. Check your connection and try again.");
+      }
+    }));
+  }
+
+  /* ---------- Join a game ---------- */
+
+  let joinFound = null;
+  VIEWS.join = (code) => `
+    <div class="card">
+      <h2>Join a game</h2>
+      <p class="muted">Enter the code shown on the other phone.</p>
+      <div class="row">
+        <input type="text" id="joinCode" class="word-input" placeholder="ABCD-1234" value="${esc(normalizeCode(code || ''))}" autocomplete="off" autocapitalize="characters" spellcheck="false" style="flex:1">
+        <button class="btn" data-g="find">Find</button>
+      </div>
+      <div id="joinResult" style="margin-top:12px"></div>
+    </div>`;
+  AFTER.join = (code) => {
+    $('#joinCode').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); findGame($('#joinCode').value); } });
+    if (code) findGame(code);
+  };
+
+  async function findGame(raw) {
+    const code = normalizeCode(raw);
+    const out = $('#joinResult');
+    if (!/^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(code)) { out.innerHTML = '<p class="verdict no">Codes look like ABCD-1234.</p>'; return; }
+    if (onlineMeta(code)) { go('online/' + code); return; }
+    out.innerHTML = '<p class="muted">Looking for the game…</p>';
+    let r;
+    try { r = await api('GET', code); } catch (e) { out.innerHTML = '<p class="verdict no">Couldn\'t reach the game service. Check your connection.</p>'; return; }
+    if (r.status === 404) { out.innerHTML = '<p class="verdict no">No game with that code.</p>'; return; }
+    if (r.status !== 200) { out.innerHTML = '<p class="verdict no">Something went wrong. Try again.</p>'; return; }
+    const g = r.data.game;
+    if (g.over) { out.innerHTML = '<p class="muted">That game has already finished.</p>'; return; }
+    joinFound = { code, game: g, etag: r.data.etag };
+    out.innerHTML = `<h3>Which player are you?</h3>
+      ${g.players.map((p) => `<div class="pick" style="--pc:${esc(p.color)}" data-g="claim" data-id="${esc(p.id)}" role="button" tabindex="0"><span class="dot"></span> ${esc(p.name)}</div>`).join('')}`;
+  }
+
+  function claimSeat(id) {
+    if (!joinFound) return;
+    const { code, game, etag } = joinFound;
+    // Match the game's players to this phone's players by id or name, adding any that are missing.
+    const map = {};
+    game.players.forEach((p) => {
+      if (playerById(p.id)) { map[p.id] = p.id; return; }
+      const same = db.players.find((x) => x.name.trim().toLowerCase() === p.name.trim().toLowerCase());
+      if (same) map[p.id] = same.id;
+      else { db.players.push({ id: p.id, name: p.name, color: p.color }); map[p.id] = p.id; }
+    });
+    game.code = code;
+    db.online = db.online || {};
+    db.online[code] = { code, me: id, etag, game, map, dirty: false, joinedAt: Date.now() };
+    joinFound = null;
+    resetUi();
+    save();
+    go('online/' + code);
   }
 
   /* ---------- Events ---------- */
@@ -648,10 +1003,30 @@ const TT = (() => {
       render();
       return;
     }
+    if (a === 'mode') { pickMode = el.dataset.mode; render(); return; }
+    if (a === 'me') { meSel = el.dataset.id; render(); return; }
+    if (a === 'open-online') { go('online/' + el.dataset.code); return; }
+    if (a === 'find') { findGame($('#joinCode').value); return; }
+    if (a === 'claim') { claimSeat(el.dataset.id); return; }
     if (a === 'start') {
       const players = pickSel.map((id) => (isCpu(id)
         ? { id, ...CPU_LEVELS[id.slice(4)] }
         : { id, name: playerById(id).name, color: playerById(id).color }));
+      if (pickMode === 'online') {
+        el.disabled = true;
+        el.textContent = 'Creating…';
+        publishOnline(newGame(players), meSel || players[0].id).then((code) => {
+          pickSel = []; meSel = null; pickMode = 'phone';
+          resetUi();
+          ui.share = code;
+          go('online/' + code);
+        }).catch(() => {
+          el.disabled = false;
+          el.textContent = 'Create online game';
+          toast("Couldn't reach the game service. Check your connection and try again.");
+        });
+        return;
+      }
       db.phone = newGame(players);
       pickSel = [];
       resetUi();
@@ -662,6 +1037,9 @@ const TT = (() => {
     }
     if (!g) return;
     const cur = current(g);
+    if (a === 'sync') { if (g.code) syncAndRefresh(g.code, true); return; }
+    const turnActions = ['sel', 'place', 'unplace', 'recall', 'shuffle', 'exchange', 'pass', 'play'];
+    if (turnActions.includes(a) && !isMyTurn(g)) { toast(`It's ${cur.name}'s turn.`); return; }
 
     switch (a) {
       case 'reveal': ui.revealed = g.moveNo; refresh(); break;
@@ -681,7 +1059,7 @@ const TT = (() => {
         }
         const i = Number(el.dataset.i);
         const ri = ui.sel;
-        const letter = g.racks[cur.id][ri];
+        const letter = g.racks[handOwner(g)][ri];
         const put = (l, b) => {
           ui.pending.push({ r: Math.floor(i / SIZE), c: i % SIZE, l, b, ri });
           ui.sel = null;
@@ -698,7 +1076,7 @@ const TT = (() => {
         break;
       }
       case 'recall': ui.pending = []; ui.sel = null; refresh(); break;
-      case 'shuffle': shuffle(g.racks[cur.id]); ui.sel = null; save(); refresh(); break;
+      case 'shuffle': shuffle(g.racks[handOwner(g)]); ui.sel = null; save(); refresh(); break;
       case 'exchange': openExchange(g); break;
       case 'pass':
         confirmModal('Pass this turn without playing?', 'Pass', () => { commitPass(g); ui.pending = []; ui.sel = null; refresh(); });
@@ -713,7 +1091,7 @@ const TT = (() => {
         ui.pending = []; ui.sel = null;
         commitPlay(g, { tiles, ...res });
         if (gameOf() === g) {
-          if (humanCount(g) <= 1) ui.msg = `${cur.name} scored ${res.score}.`;
+          if (humanCount(g) <= 1 || g.code) ui.msg = `${cur.name} scored ${res.score}.`;
           refresh();
         }
         break;
@@ -726,7 +1104,7 @@ const TT = (() => {
     if ((e.key === 'Enter' || e.key === ' ') && e.target.dataset && e.target.dataset.g === 'pick') { e.preventDefault(); e.target.click(); }
   });
 
-  return { analyze, generateMoves, chooseCpuMove, newGame, PREM, VAL, SIZE, GAME_NAME, gameOf };
+  return { analyze, generateMoves, chooseCpuMove, newGame, PREM, VAL, SIZE, GAME_NAME, gameOf, homeCards, pullOnline };
 })();
 
 render();

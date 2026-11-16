@@ -36,3 +36,10 @@ An original crossword tile game, separate from the scorekeeper. It has its own b
 - **History:** finished games go into the same match history and stats as the scorekeeper.
 
 The game logic is in `game.js`. Board layout, tile counts and values are at the top of that file.
+
+## Two-phone (online) play
+- **Starting:** in Play, choose **Two phones**, pick the players and which one is you, then send the game code or link to the other phone. That phone uses **Join a game**.
+- **Moving a game online:** a one-phone game can be moved online at any time with ⋯ → **Continue on two phones**.
+- **Your turn:** the home screen shows **Your turn!**, and an open game checks for the other player's move every few seconds.
+- **No connection:** moves are saved on the phone and sent when the connection is back.
+- **Where games are stored:** shared games live in a small Netlify service (`lunar-api/`, deployed as `lunar-games-api.netlify.app`). Anyone with a game's code can open it.

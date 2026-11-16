@@ -1,0 +1,10 @@
+{
+  "name": "lunar-api",
+  "private": true,
+  "type": "module",
+  "description": "Stores shared online games for the Lunar app (two-phone play).",
+  "dependencies": {
+    "@netlify/blobs": "^10.0.0",
+    "@netlify/functions": "^4.0.0"
+  }
+}

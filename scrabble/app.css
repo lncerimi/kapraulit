@@ -379,3 +379,8 @@ input[type=color] { width: 44px; height: 44px; border: 0; padding: 0; background
 }
 .btn.light { background: color-mix(in srgb, var(--surface) 75%, transparent); }
 main > p.muted, main > .muted { background: color-mix(in srgb, var(--surface) 85%, transparent); padding: 8px 12px; border-radius: 10px; }
+
+/* Online play */
+.code-big { font: 700 2.2rem var(--font-display); letter-spacing: .12em; text-align: center; padding: 14px; margin: 8px 0; border: 2px dashed var(--accent); border-radius: 14px; background: var(--surface-2); user-select: all; }
+.sync-line { text-align: center; font-size: .8rem; color: var(--bar-ink); text-shadow: 0 1px 2px rgba(0,0,0,.5); margin-top: 10px; }
+.sync-line .btn { min-height: 28px; padding: 0 10px; font-size: .8rem; color: var(--bar-ink); border-color: rgba(255,255,255,.35); }

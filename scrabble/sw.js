@@ -1,6 +1,6 @@
 // Offline support: serve the app from cache, refresh it in the background.
 // Bump VERSION when shipping changes so phones pick up the new files.
-const VERSION = 'v3';
+const VERSION = 'v5';
 const CACHE = 'scorekeeper-' + VERSION;
 const SHELL = [
   './',
